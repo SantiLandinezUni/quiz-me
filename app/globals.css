@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+}
+
+html {
+  /* Never allow sideways scrolling on small phones. */
+  overflow-x: hidden;
+}
+
+body {
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+/* Clearly visible keyboard focus on every interactive element. */
+:focus-visible {
+  outline: 3px solid #4338ca; /* indigo-700 */
+  outline-offset: 2px;
+}
