@@ -39,6 +39,8 @@ export function SetEditor({
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [quiz, setQuiz] = useState<Quiz | null>(initialQuiz);
+  // Bumped by "Retake quiz" to restart the same questions with answers cleared.
+  const [attempt, setAttempt] = useState(0);
 
   const length = material.trim().length;
   const unsaved = material !== savedMaterial;
@@ -57,6 +59,24 @@ export function SetEditor({
     }
     setSavedMaterial(material);
     setSaveStatus("Material saved.");
+  }
+
+  function handleRetake() {
+    setAttempt((a) => a + 1);
+    // Wait for the fresh quiz to render, then bring the user back to the top of it.
+    requestAnimationFrame(() => {
+      const heading = document.getElementById("quiz-heading");
+      heading?.scrollIntoView({ behavior: "smooth", block: "start" });
+      heading?.focus({ preventScroll: true });
+    });
+  }
+
+  function handleGenerateNew() {
+    // Show the options and progress message while the new quiz is generated.
+    document
+      .getElementById("generate-section")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    handleGenerate();
   }
 
   async function handleGenerate() {
@@ -173,6 +193,7 @@ export function SetEditor({
       </section>
 
       <section
+        id="generate-section"
         aria-labelledby="generate-heading"
         className="mt-6 rounded-xl border border-slate-200 bg-white p-5"
       >
@@ -250,12 +271,23 @@ export function SetEditor({
             Generating again replaces the current quiz.
           </p>
         )}
-        <p role="status" className="sr-only">
-          {generating ? "Generating your quiz, this can take a few seconds." : ""}
+        <p role="status" className="mt-2 font-medium text-indigo-900">
+          {generating
+            ? "Generating your quiz… this can take up to 30 seconds"
+            : ""}
         </p>
       </section>
 
-      {quiz && <QuizPlayer key={quiz.generatedAt} quiz={quiz} />}
+      {quiz && (
+        <QuizPlayer
+          // A new key remounts the player, which resets all answers.
+          key={`${quiz.generatedAt}-${attempt}`}
+          quiz={quiz}
+          generating={generating}
+          onRetake={handleRetake}
+          onGenerateNew={handleGenerateNew}
+        />
+      )}
     </>
   );
 }

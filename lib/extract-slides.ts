@@ -16,7 +16,17 @@ export class SlidesError extends Error {}
 const NO_TEXT_MESSAGE =
   "We couldn't find any text in this file. It may be made of scanned images or pictures of slides. Please copy and paste the text into the box instead.";
 
-export async function extractSlidesText(file: File): Promise<string> {
+// What was read: the text, and how many slides/pages had text out of the total.
+export type ExtractedSlides = {
+  text: string;
+  unit: "slide" | "page";
+  withText: number;
+  total: number;
+};
+
+type Parts = { parts: string[]; total: number };
+
+export async function extractSlidesText(file: File): Promise<ExtractedSlides> {
   const name = file.name.toLowerCase();
   const kind = name.endsWith(".pdf")
     ? "pdf"
@@ -52,12 +62,19 @@ export async function extractSlidesText(file: File): Promise<string> {
     throw new SlidesError("This doesn't look like a valid PowerPoint (.pptx) file. Please check the file and try again.");
   }
 
-  const text = kind === "pdf" ? await extractPdf(data) : await extractPptx(data);
+  const { parts, total } =
+    kind === "pdf" ? await extractPdf(data) : await extractPptx(data);
+  const text = parts.join("\n\n");
 
   if (text.replace(/[^\p{L}\p{N}]/gu, "").length < MIN_TEXT_CHARS) {
     throw new SlidesError(NO_TEXT_MESSAGE);
   }
-  return text;
+  return {
+    text,
+    unit: kind === "pdf" ? "page" : "slide",
+    withText: parts.length,
+    total,
+  };
 }
 
 // Collapses repeated spaces, trims every line and removes extra blank lines.
@@ -72,7 +89,7 @@ function tidy(text: string) {
 
 // ---------- PDF ----------
 
-async function extractPdf(data: Uint8Array): Promise<string> {
+async function extractPdf(data: Uint8Array): Promise<Parts> {
   // Loaded only when needed, so it never slows down page loads.
   const pdfjs = await import("pdfjs-dist");
   // Copied into public/ by scripts/copy-pdf-worker.mjs (works on Vercel too).
@@ -105,7 +122,7 @@ async function extractPdf(data: Uint8Array): Promise<string> {
       pages.push(tidy(pageText));
       page.cleanup();
     }
-    return pages.filter(Boolean).join("\n\n");
+    return { parts: pages.filter(Boolean), total: doc.numPages };
   } finally {
     // Frees the worker and memory used by this document.
     await loadingTask.destroy();
@@ -137,7 +154,7 @@ function resolveTarget(target: string) {
   return parts.join("/");
 }
 
-async function extractPptx(data: Uint8Array): Promise<string> {
+async function extractPptx(data: Uint8Array): Promise<Parts> {
   const { default: JSZipLib } = await import("jszip");
 
   let zip;
@@ -159,7 +176,7 @@ async function extractPptx(data: Uint8Array): Promise<string> {
     const text = slideText(parseXml(xml));
     if (text) slides.push(`Slide ${index + 1}\n${text}`);
   }
-  return slides.join("\n\n");
+  return { parts: slides, total: slidePaths.length };
 }
 
 // Slide files in presentation order (the order in presentation.xml,

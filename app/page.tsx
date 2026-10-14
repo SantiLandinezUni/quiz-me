@@ -1,9 +1,15 @@
-import Link from "next/link";
+import type { Metadata } from "next";
+import { HomeCta } from "@/components/home-cta";
+
+export const metadata: Metadata = {
+  description:
+    "For university students studying from slides: upload your professor's PDF or PowerPoint and turn it into a practice quiz in minutes, so you walk into the exam knowing what you know.",
+};
 
 const steps = [
   {
-    title: "Paste your slides",
-    text: "Copy the text from your professor's lecture slides or your notes.",
+    title: "Upload your slides",
+    text: "Upload a PDF or PowerPoint, or paste your notes.",
   },
   {
     title: "Get a quiz",
@@ -15,34 +21,34 @@ const steps = [
   },
 ];
 
+// Static preview of a generated question (not interactive).
+const example = {
+  question:
+    "A government sets a price ceiling below the market equilibrium price. What happens?",
+  options: [
+    "A surplus, because sellers produce more",
+    "A shortage, because quantity demanded exceeds quantity supplied",
+    "Nothing, because the market ignores the ceiling",
+    "The demand curve shifts to the right",
+  ],
+  correctIndex: 1,
+  explanation:
+    "At the lower legal price buyers want more than sellers are willing to supply, so there is a shortage.",
+};
+
 export default function Home() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-12 sm:py-20">
       <section className="text-center">
-        <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-5xl">
-          University students: turn your lecture slides into practice quizzes
+        <h1 className="text-3xl font-bold tracking-tight text-balance text-slate-900 sm:text-5xl">
+          Exam coming up? Turn your lecture slides into a practice quiz.
         </h1>
-        <p className="mx-auto mt-4 max-w-xl text-lg text-slate-700">
-          Paste what your professor gave you and test yourself in minutes, so
+        <p className="mx-auto mt-4 max-w-xl text-lg text-pretty text-slate-700">
+          For university students studying from slides: upload your
+          professor&apos;s PDF or PowerPoint and test yourself in minutes, so
           you walk into the exam knowing what you know.
         </p>
-        <div className="mt-8 flex flex-col items-center gap-3">
-          <Link
-            href="/signup"
-            className="inline-flex min-h-12 items-center justify-center rounded-lg bg-indigo-700 px-8 text-lg font-semibold text-white hover:bg-indigo-800"
-          >
-            Sign up
-          </Link>
-          <p className="text-sm text-slate-700">
-            Already have an account?{" "}
-            <Link
-              href="/login"
-              className="font-medium text-indigo-700 underline underline-offset-2"
-            >
-              Log in
-            </Link>
-          </p>
-        </div>
+        <HomeCta />
       </section>
 
       <section aria-labelledby="how-it-works" className="mt-16">
@@ -71,6 +77,47 @@ export default function Home() {
             </li>
           ))}
         </ol>
+      </section>
+
+      <section aria-labelledby="example-question" className="mt-16">
+        <h2
+          id="example-question"
+          className="text-center text-xl font-semibold text-slate-900"
+        >
+          Example question
+        </h2>
+        <div className="mx-auto mt-6 max-w-xl rounded-xl border border-slate-200 bg-white p-5">
+          <p className="text-sm font-medium text-slate-600">
+            Multiple choice · Microeconomics
+          </p>
+          <p className="mt-1 font-semibold text-slate-900">{example.question}</p>
+          <ol className="mt-3 space-y-2">
+            {example.options.map((option, o) => {
+              const correct = o === example.correctIndex;
+              return (
+                <li
+                  key={option}
+                  className={`flex items-start gap-2 rounded-lg border-2 px-3 py-2 text-slate-900 ${
+                    correct ? "border-green-700 bg-green-50" : "border-slate-200"
+                  }`}
+                >
+                  <span className="font-semibold">
+                    {String.fromCharCode(65 + o)}.
+                  </span>
+                  <span className="min-w-0 flex-1 break-words">{option}</span>
+                  {correct && (
+                    <span className="shrink-0 font-semibold text-green-800">
+                      ✓ Correct
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+          <p className="mt-3 rounded-lg bg-green-50 p-3 text-green-900">
+            <strong>Why:</strong> {example.explanation}
+          </p>
+        </div>
       </section>
     </div>
   );

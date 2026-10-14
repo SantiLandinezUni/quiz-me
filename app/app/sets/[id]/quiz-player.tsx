@@ -3,9 +3,21 @@
 import { useState } from "react";
 import type { Question, Quiz } from "@/lib/quiz";
 
-export function QuizPlayer({ quiz }: { quiz: Quiz }) {
+export function QuizPlayer({
+  quiz,
+  generating,
+  onRetake,
+  onGenerateNew,
+}: {
+  quiz: Quiz;
+  generating: boolean;
+  onRetake: () => void;
+  onGenerateNew: () => void;
+}) {
   // Index of the option picked for each multiple-choice question.
   const [answers, setAnswers] = useState<Record<number, number>>({});
+  // Open-ended questions whose model answer has been shown.
+  const [revealed, setRevealed] = useState<Record<number, boolean>>({});
 
   const mcqIndexes = quiz.questions
     .map((q, i) => (q.type === "mcq" ? i : -1))
@@ -15,11 +27,19 @@ export function QuizPlayer({ quiz }: { quiz: Quiz }) {
     const q = quiz.questions[i];
     return q.type === "mcq" && answers[i] === q.correctIndex;
   }).length;
-  const allAnswered = mcqIndexes.length > 0 && answeredCount === mcqIndexes.length;
+  const allAnswered = answeredCount === mcqIndexes.length;
+  // Finished = every multiple-choice answered and every model answer revealed.
+  const finished =
+    allAnswered &&
+    quiz.questions.every((q, i) => q.type === "mcq" || revealed[i]);
 
   return (
     <section aria-labelledby="quiz-heading" className="mt-6">
-      <h2 id="quiz-heading" className="text-lg font-semibold text-slate-900">
+      <h2
+        id="quiz-heading"
+        tabIndex={-1}
+        className="scroll-mt-4 text-lg font-semibold text-slate-900"
+      >
         Your practice quiz
       </h2>
       <ol className="mt-3 space-y-4">
@@ -40,7 +60,12 @@ export function QuizPlayer({ quiz }: { quiz: Quiz }) {
                 onPick={(opt) => setAnswers((prev) => ({ ...prev, [i]: opt }))}
               />
             ) : (
-              <OpenQuestion index={i} question={q} />
+              <OpenQuestion
+                index={i}
+                question={q}
+                revealed={Boolean(revealed[i])}
+                onReveal={() => setRevealed((prev) => ({ ...prev, [i]: true }))}
+              />
             )}
           </li>
         ))}
@@ -63,6 +88,32 @@ export function QuizPlayer({ quiz }: { quiz: Quiz }) {
               questions. Your score appears when you finish.
             </p>
           )}
+        </div>
+      )}
+
+      {finished && (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-5">
+          <p className="font-semibold text-slate-900">
+            Quiz finished. What next?
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={onRetake}
+              disabled={generating}
+              className="min-h-11 rounded-lg bg-indigo-700 px-4 font-semibold text-white hover:bg-indigo-800 disabled:opacity-60"
+            >
+              Retake quiz
+            </button>
+            <button
+              type="button"
+              onClick={onGenerateNew}
+              disabled={generating}
+              className="min-h-11 rounded-lg border border-indigo-700 px-4 font-medium text-indigo-800 hover:bg-indigo-50 disabled:opacity-60"
+            >
+              {generating ? "Generating new questions…" : "Generate new questions"}
+            </button>
+          </div>
         </div>
       )}
     </section>
@@ -133,12 +184,15 @@ function McqQuestion({
 function OpenQuestion({
   index,
   question,
+  revealed,
+  onReveal,
 }: {
   index: number;
   question: Extract<Question, { type: "open" }>;
+  revealed: boolean;
+  onReveal: () => void;
 }) {
   const [answer, setAnswer] = useState("");
-  const [revealed, setRevealed] = useState(false);
   const inputId = `open-answer-${index}`;
 
   return (
@@ -160,7 +214,7 @@ function OpenQuestion({
       {!revealed ? (
         <button
           type="button"
-          onClick={() => setRevealed(true)}
+          onClick={onReveal}
           className="mt-3 min-h-11 rounded-lg border border-indigo-700 px-4 font-medium text-indigo-800 hover:bg-indigo-50"
         >
           Show model answer

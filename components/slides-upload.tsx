@@ -29,11 +29,16 @@ export function SlidesUpload({
     setBusy(true);
     setMessage(null);
     try {
-      const text = await extractSlidesText(file);
+      const { text, unit, withText, total } = await extractSlidesText(file);
       onText(text);
+      // e.g. "Extracted text from 12 slides" or "from 10 of 12 slides".
+      const counted =
+        withText === total
+          ? `${total} ${unit}${total === 1 ? "" : "s"}`
+          : `${withText} of ${total} ${unit}s`;
       setMessage({
         kind: "ok",
-        text: `Added ${text.length.toLocaleString()} characters from "${file.name}". Check the text below and edit it if needed.`,
+        text: `Extracted text from ${counted} (${text.length.toLocaleString()} characters) in "${file.name}". Check the text below and edit it if needed.`,
       });
     } catch (err) {
       console.error("Slide text extraction failed:", err);
