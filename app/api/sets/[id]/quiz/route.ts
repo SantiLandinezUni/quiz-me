@@ -12,9 +12,9 @@ import {
 } from "@/lib/quiz";
 
 // Current free-tier Gemini models (checked in Google's docs, Oct 2026).
-// If the main model keeps failing we try the fallback once.
+// If the main model keeps failing we try each backup model once, in order.
 const MODEL = "gemini-3.8-flash";
-const FALLBACK_MODEL = "gemini-3.5-flash-lite";
+const FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.6-flash"];
 
 // Waits before each retry of the main model (2 retries: ~1s, then ~3s).
 const RETRY_DELAYS_MS = [1000, 3000];
@@ -69,8 +69,9 @@ const RawQuestionSchema = z.object({
 });
 const RawResponseSchema = z.object({ questions: z.array(z.unknown()) });
 
-function error(message: string, status: number) {
-  return NextResponse.json({ error: message }, { status });
+// `code` lets the page tell a busy AI (worth retrying) from other errors.
+function error(message: string, status: number, code?: "ai_busy") {
+  return NextResponse.json({ error: message, code }, { status });
 }
 
 function typeInstructions(questionType: z.infer<typeof QuestionTypeSchema>) {
@@ -117,6 +118,26 @@ type AttemptResult =
   | { ok: true; questions: Question[] }
   | { ok: false; busy: boolean };
 
+// The model answered, but not with a usable quiz.
+class InvalidOutputError extends Error {}
+
+// Why an attempt failed, for the logs (never includes material or keys).
+function failureReason(err: unknown) {
+  if (isBusyError(err)) return "busy";
+  if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError"))
+    return "timeout";
+  if (err instanceof InvalidOutputError || err instanceof SyntaxError || err instanceof z.ZodError)
+    return "invalid_output";
+  if (err instanceof ApiError) return "api_error";
+  return "network_or_unknown";
+}
+
+// One log line per attempt, e.g. in Vercel's logs:
+// {"event":"quiz_ai_attempt","req":"a1b2c3d4","model":"gemini-3.8-flash","try":1,"outcome":"busy","status":503,"ms":412}
+function logAttempt(fields: Record<string, string | number | undefined>) {
+  console.log(JSON.stringify({ event: "quiz_ai_attempt", ...fields }));
+}
+
 // One call to one model. Never throws: failures come back as { ok: false }.
 async function attempt(
   ai: GoogleGenAI,
@@ -124,7 +145,9 @@ async function attempt(
   prompt: { contents: string; systemInstruction: string },
   count: number,
   timeoutMs: number,
+  log: { req: string; try: number },
 ): Promise<AttemptResult> {
+  const started = Date.now();
   try {
     const response = await ai.models.generateContent({
       model,
@@ -143,46 +166,74 @@ async function attempt(
       .map(toQuestion)
       .filter((q): q is Question => q !== null)
       .slice(0, count);
-    if (questions.length === 0) throw new Error("No usable questions in AI response");
+    if (questions.length === 0) throw new InvalidOutputError();
+    logAttempt({ ...log, model, outcome: "ok", questions: questions.length, ms: Date.now() - started });
     return { ok: true, questions };
   } catch (err) {
-    console.error(`Gemini quiz generation failed (${model}):`, err);
+    logAttempt({
+      ...log,
+      model,
+      outcome: failureReason(err),
+      status: err instanceof ApiError ? err.status : undefined,
+      ms: Date.now() - started,
+    });
     return { ok: false, busy: isBusyError(err) };
   }
 }
 
-// Main model with up to 2 retries when it's busy, then the fallback model once.
+// Main model with up to 2 retries when it's busy, then each backup model once.
 // Every attempt is cut off so the total stays inside AI_BUDGET_MS.
 async function generateQuestions(
   ai: GoogleGenAI,
   prompt: { contents: string; systemInstruction: string },
   count: number,
 ): Promise<AttemptResult> {
-  const deadline = Date.now() + AI_BUDGET_MS;
+  const started = Date.now();
+  const deadline = started + AI_BUDGET_MS;
   const timeLeft = () => deadline - Date.now();
   const attemptTimeout = () => Math.min(ATTEMPT_TIMEOUT_MS, timeLeft());
+  // Short random id that ties together the log lines of one request.
+  const log = { req: crypto.randomUUID().slice(0, 8), try: 0 };
+  const run = (model: string) => {
+    log.try += 1;
+    return attempt(ai, model, prompt, count, attemptTimeout(), { ...log });
+  };
+  const finish = (result: AttemptResult, model?: string) => {
+    console.log(
+      JSON.stringify({
+        event: "quiz_ai_result",
+        req: log.req,
+        outcome: result.ok ? "ok" : result.busy ? "busy" : "failed",
+        model: result.ok ? model : undefined,
+        tries: log.try,
+        ms: Date.now() - started,
+      }),
+    );
+    return result;
+  };
   let sawBusy = false;
 
-  let result = await attempt(ai, MODEL, prompt, count, attemptTimeout());
+  let result = await run(MODEL);
   for (const delay of RETRY_DELAYS_MS) {
     // Only retry the same model when it said it's busy; other errors
-    // (bad output, timeout) go straight to the fallback model.
+    // (bad output, timeout) go straight to the backup models.
     if (result.ok || !result.busy) break;
     sawBusy = true;
     if (timeLeft() < delay + MIN_ATTEMPT_MS) break;
     await sleep(delay);
-    result = await attempt(ai, MODEL, prompt, count, attemptTimeout());
+    result = await run(MODEL);
   }
-  if (result.ok) return result;
+  if (result.ok) return finish(result, MODEL);
   sawBusy ||= result.busy;
 
-  if (timeLeft() >= MIN_ATTEMPT_MS) {
-    result = await attempt(ai, FALLBACK_MODEL, prompt, count, attemptTimeout());
-    if (result.ok) return result;
+  for (const model of FALLBACK_MODELS) {
+    if (timeLeft() < MIN_ATTEMPT_MS) break;
+    result = await run(model);
+    if (result.ok) return finish(result, model);
     sawBusy ||= result.busy;
   }
 
-  return { ok: false, busy: sawBusy };
+  return finish({ ok: false, busy: sawBusy });
 }
 
 export async function POST(
@@ -258,6 +309,7 @@ export async function POST(
       ? error(
           "Sorry, the AI couldn't generate a quiz right now because the AI service is busy. Please try again in a moment.",
           503,
+          "ai_busy",
         )
       : error(
           "Sorry, the AI couldn't generate a quiz right now. Please try again in a moment.",

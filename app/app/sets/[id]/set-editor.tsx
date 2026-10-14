@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
   MAX_MATERIAL,
@@ -11,6 +11,17 @@ import {
 import { SAMPLE_MATERIAL } from "@/lib/sample-material";
 import { SlidesUpload } from "@/components/slides-upload";
 import { QuizPlayer } from "./quiz-player";
+
+// When the AI is busy, wait this many seconds before each automatic retry.
+const BUSY_RETRY_SECONDS = [10, 20, 30];
+
+type GenerateOutcome =
+  | { kind: "ok"; quiz: Quiz }
+  | { kind: "busy"; message: string }
+  | { kind: "error"; message: string }
+  | { kind: "cancelled" };
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const TYPE_OPTIONS: { value: QuestionType; label: string }[] = [
   { value: "mcq", label: "Multiple choice" },
@@ -41,6 +52,23 @@ export function SetEditor({
   const [quiz, setQuiz] = useState<Quiz | null>(initialQuiz);
   // Bumped by "Retake quiz" to restart the same questions with answers cleared.
   const [attempt, setAttempt] = useState(0);
+  // Set while waiting to retry because the AI was busy.
+  const [busyRetry, setBusyRetry] = useState<{
+    retry: number;
+    secondsLeft: number | null; // null = the retry request is running now
+  } | null>(null);
+  // Each generation run gets an id; Cancel (or leaving the page) bumps it,
+  // which makes the running loop stop.
+  const runIdRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(
+    () => () => {
+      runIdRef.current += 1;
+      abortRef.current?.abort();
+    },
+    [],
+  );
 
   const length = material.trim().length;
   const unsaved = material !== savedMaterial;
@@ -79,6 +107,35 @@ export function SetEditor({
     handleGenerate();
   }
 
+  // One request to the quiz route.
+  async function requestQuiz(): Promise<GenerateOutcome> {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const res = await fetch(`/api/sets/${id}/quiz`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ material, questionType, count }),
+        signal: controller.signal,
+      });
+      const body = await res.json().catch(() => null);
+      if (res.ok && body?.quiz) return { kind: "ok", quiz: body.quiz as Quiz };
+      const message =
+        body?.error ??
+        "Sorry, we couldn't generate a quiz right now. Please try again in a moment.";
+      return body?.code === "ai_busy" || res.status === 429
+        ? { kind: "busy", message }
+        : { kind: "error", message };
+    } catch {
+      if (controller.signal.aborted) return { kind: "cancelled" };
+      return {
+        kind: "error",
+        message:
+          "Sorry, we couldn't reach the quiz generator. Check your connection and try again.",
+      };
+    }
+  }
+
   async function handleGenerate() {
     setGenError(null);
     if (length < MIN_MATERIAL) {
@@ -94,31 +151,49 @@ export function SetEditor({
       return;
     }
 
+    const runId = ++runIdRef.current;
+    const cancelled = () => runIdRef.current !== runId;
     setGenerating(true);
     try {
-      const res = await fetch(`/api/sets/${id}/quiz`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ material, questionType, count }),
-      });
-      const body = await res.json().catch(() => null);
-      if (!res.ok || !body?.quiz) {
-        setGenError(
-          body?.error ??
-            "Sorry, we couldn't generate a quiz right now. Please try again in a moment.",
-        );
-        return;
+      for (let retry = 0; ; retry++) {
+        const outcome = await requestQuiz();
+        if (cancelled() || outcome.kind === "cancelled") return;
+
+        if (outcome.kind === "ok") {
+          setQuiz(outcome.quiz);
+          // The route also saves the material it used.
+          setSavedMaterial(material);
+          return;
+        }
+        if (outcome.kind === "error" || retry >= BUSY_RETRY_SECONDS.length) {
+          setGenError(outcome.message);
+          return;
+        }
+
+        // AI busy: count down, then try again automatically.
+        for (let left = BUSY_RETRY_SECONDS[retry]; left > 0; left--) {
+          setBusyRetry({ retry: retry + 1, secondsLeft: left });
+          await sleep(1000);
+          if (cancelled()) return;
+        }
+        setBusyRetry({ retry: retry + 1, secondsLeft: null });
       }
-      setQuiz(body.quiz as Quiz);
-      // The route also saves the material it used.
-      setSavedMaterial(material);
-    } catch {
-      setGenError(
-        "Sorry, we couldn't reach the quiz generator. Check your connection and try again.",
-      );
     } finally {
-      setGenerating(false);
+      if (!cancelled()) {
+        setGenerating(false);
+        setBusyRetry(null);
+      }
     }
+  }
+
+  function handleCancelRetry() {
+    runIdRef.current += 1;
+    abortRef.current?.abort();
+    setGenerating(false);
+    setBusyRetry(null);
+    setGenError(
+      "Automatic retrying was cancelled. You can click \"Generate quiz\" again whenever you like.",
+    );
   }
 
   return (
@@ -271,10 +346,41 @@ export function SetEditor({
             Generating again replaces the current quiz.
           </p>
         )}
-        <p role="status" className="mt-2 font-medium text-indigo-900">
-          {generating
-            ? "Generating your quiz… this can take up to 30 seconds"
-            : ""}
+        {busyRetry ? (
+          <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-950">
+            <p aria-hidden="true" className="font-medium">
+              {busyRetry.secondsLeft !== null
+                ? `The AI is busy right now — retrying in ${busyRetry.secondsLeft} second${busyRetry.secondsLeft === 1 ? "" : "s"}…`
+                : "Retrying now…"}
+            </p>
+            <p aria-hidden="true" className="mt-1 text-sm">
+              Automatic retry {busyRetry.retry} of {BUSY_RETRY_SECONDS.length}
+            </p>
+            <button
+              type="button"
+              onClick={handleCancelRetry}
+              className="mt-2 min-h-11 rounded-lg border border-amber-700 bg-white px-4 font-medium text-amber-950 hover:bg-amber-100"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          generating && (
+            <p aria-hidden="true" className="mt-2 font-medium text-indigo-900">
+              Generating your quiz… this can take up to 30 seconds
+            </p>
+          )
+        )}
+        {/* Always present so screen readers announce changes. It only changes
+            once per phase, not every second of the countdown. */}
+        <p role="status" className="sr-only">
+          {busyRetry
+            ? busyRetry.secondsLeft !== null
+              ? `The AI is busy right now. Retry ${busyRetry.retry} of ${BUSY_RETRY_SECONDS.length} will start automatically in ${BUSY_RETRY_SECONDS[busyRetry.retry - 1]} seconds.`
+              : `Retrying now, attempt ${busyRetry.retry} of ${BUSY_RETRY_SECONDS.length}.`
+            : generating
+              ? "Generating your quiz, this can take up to 30 seconds."
+              : ""}
         </p>
       </section>
 
