@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { StudySet } from "@/lib/quiz";
+import { SlidesUpload } from "@/components/slides-upload";
 
 export function StudySetsManager({
   initialSets,
@@ -83,21 +84,31 @@ export function StudySetsManager({
             className="mt-1 block min-h-11 w-full rounded-lg border border-slate-400 px-3 text-base placeholder:text-slate-500"
           />
         </div>
-        <div>
-          <label
-            htmlFor="set-material"
-            className="block text-sm font-medium text-slate-800"
-          >
-            Paste your slides or notes{" "}
-            <span className="font-normal text-slate-600">(optional)</span>
-          </label>
-          <textarea
-            id="set-material"
-            rows={4}
-            value={material}
-            onChange={(e) => setMaterial(e.target.value)}
-            className="mt-1 block w-full rounded-lg border border-slate-400 px-3 py-2 text-base"
+        <div className="space-y-3">
+          {/* Adds text to the box below; never touches the title or saving. */}
+          <SlidesUpload
+            onText={(text) =>
+              setMaterial((prev) =>
+                prev.trim() ? `${prev.trimEnd()}\n\n${text}` : text,
+              )
+            }
           />
+          <div>
+            <label
+              htmlFor="set-material"
+              className="block text-sm font-medium text-slate-800"
+            >
+              Paste your slides or notes{" "}
+              <span className="font-normal text-slate-600">(optional)</span>
+            </label>
+            <textarea
+              id="set-material"
+              rows={4}
+              value={material}
+              onChange={(e) => setMaterial(e.target.value)}
+              className="mt-1 block w-full rounded-lg border border-slate-400 px-3 py-2 text-base"
+            />
+          </div>
         </div>
 
         {error && (

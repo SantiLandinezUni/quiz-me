@@ -9,6 +9,7 @@ import {
   type QuestionType,
 } from "@/lib/quiz";
 import { SAMPLE_MATERIAL } from "@/lib/sample-material";
+import { SlidesUpload } from "@/components/slides-upload";
 import { QuizPlayer } from "./quiz-player";
 
 const TYPE_OPTIONS: { value: QuestionType; label: string }[] = [
@@ -113,6 +114,16 @@ export function SetEditor({
         <h2 id="material-heading" className="text-lg font-semibold">
           Lecture material
         </h2>
+        <div className="mt-3">
+          <SlidesUpload
+            onText={(text) => {
+              setMaterial((prev) =>
+                prev.trim() ? `${prev.trimEnd()}\n\n${text}` : text,
+              );
+              setSaveStatus(null);
+            }}
+          />
+        </div>
         <label
           htmlFor="material"
           className="mt-3 block text-sm font-medium text-slate-800"
