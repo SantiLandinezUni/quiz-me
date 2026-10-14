@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { parseQuiz } from "@/lib/quiz";
+import { parseAttempts, parseQuiz } from "@/lib/quiz";
 import { SetEditor } from "./set-editor";
 
 export const metadata: Metadata = { title: "Study set – QuizMe" };
@@ -47,12 +47,30 @@ async function StudySetLoader({ id }: { id: string }) {
 
   if (!set) notFound();
 
+  // Past attempts for this set (newest first). If this fails, e.g. before the
+  // quiz_attempts table exists, the rest of the page still works.
+  const {
+    data: attempts,
+    count: attemptCount,
+    error: attemptsError,
+  } = await supabase
+    .from("quiz_attempts")
+    .select("id, score, total, kind, wrong_questions, correct_keys, created_at", {
+      count: "exact",
+    })
+    .eq("study_set_id", set.id)
+    .order("created_at", { ascending: false })
+    .limit(100);
+
   return (
     <SetEditor
       id={set.id}
       title={set.title}
       initialMaterial={set.material}
       initialQuiz={parseQuiz(set.quiz)}
+      initialAttempts={parseAttempts(attempts ?? [])}
+      initialAttemptCount={attemptCount ?? 0}
+      historyError={Boolean(attemptsError)}
     />
   );
 }

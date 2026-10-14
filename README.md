@@ -12,7 +12,7 @@ Built with Next.js (App Router, TypeScript, Tailwind), Supabase (Auth + Postgres
    npm install
    ```
 3. Create a file called `.env.local` in the project root with the variables listed below.
-4. In Supabase, run `supabase/schema.sql` (SQL Editor → New query → Run) and turn off email confirmation (Authentication → Sign In / Providers → Email → "Confirm email" off).
+4. In Supabase, run `supabase/schema.sql` and then `supabase/quiz_attempts.sql` (SQL Editor → New query → Run, one file at a time) and turn off email confirmation (Authentication → Sign In / Providers → Email → "Confirm email" off).
 5. Start the dev server:
    ```bash
    npm run dev

@@ -3,14 +3,15 @@
 import Link from "next/link";
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import type { StudySet } from "@/lib/quiz";
+import type { StudySetSummary } from "@/lib/quiz";
+import { MaterialSize } from "@/components/material-size";
 import { SlidesUpload } from "@/components/slides-upload";
 
 export function StudySetsManager({
   initialSets,
   loadError,
 }: {
-  initialSets: StudySet[];
+  initialSets: StudySetSummary[];
   loadError: string | null;
 }) {
   const [sets, setSets] = useState(initialSets);
@@ -33,7 +34,7 @@ export function StudySetsManager({
     const { data, error } = await createClient()
       .from("study_sets")
       .insert({ title: cleanTitle, material })
-      .select("id, title, material, quiz, created_at")
+      .select("id, title, created_at")
       .single();
 
     setSaving(false);
@@ -41,12 +42,12 @@ export function StudySetsManager({
       setError("Could not save the study set. Please try again.");
       return;
     }
-    setSets((prev) => [data as StudySet, ...prev]);
+    setSets((prev) => [data as StudySetSummary, ...prev]);
     setTitle("");
     setMaterial("");
   }
 
-  async function handleDelete(set: StudySet) {
+  async function handleDelete(set: StudySetSummary) {
     if (!window.confirm(`Delete "${set.title}"? This cannot be undone.`)) return;
     const { error } = await createClient()
       .from("study_sets")
@@ -106,8 +107,12 @@ export function StudySetsManager({
               rows={4}
               value={material}
               onChange={(e) => setMaterial(e.target.value)}
+              aria-describedby={material ? "set-material-size" : undefined}
               className="mt-1 block w-full rounded-lg border border-slate-400 px-3 py-2 text-base"
             />
+            {material && (
+              <MaterialSize id="set-material-size" material={material} />
+            )}
           </div>
         </div>
 

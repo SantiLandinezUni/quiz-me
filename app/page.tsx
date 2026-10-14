@@ -3,7 +3,7 @@ import { HomeCta } from "@/components/home-cta";
 
 export const metadata: Metadata = {
   description:
-    "For university students studying from slides: upload your professor's PDF or PowerPoint and turn it into a practice quiz in minutes, so you walk into the exam knowing what you know.",
+    "For university students studying from slides: upload a whole course of PDFs and PowerPoints, get practice quizzes in minutes, and practise your mistakes until you know them for the exam.",
 };
 
 const steps = [
@@ -44,9 +44,9 @@ export default function Home() {
           Exam coming up? Turn your lecture slides into a practice quiz.
         </h1>
         <p className="mx-auto mt-4 max-w-xl text-lg text-pretty text-slate-700">
-          For university students studying from slides: upload your
-          professor&apos;s PDF or PowerPoint and test yourself in minutes, so
-          you walk into the exam knowing what you know.
+          For university students studying from slides: upload a whole course
+          of PDFs and PowerPoints, test yourself in minutes, and practise your
+          mistakes until you know them for the exam.
         </p>
         <HomeCta />
       </section>

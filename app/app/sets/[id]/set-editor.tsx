@@ -1,16 +1,31 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
+  MAX_FOCUS,
   MAX_MATERIAL,
   MIN_MATERIAL,
+  parseAttempts,
+  unresolvedMistakes,
+  type Attempt,
   type Quiz,
   type QuestionType,
 } from "@/lib/quiz";
 import { SAMPLE_MATERIAL } from "@/lib/sample-material";
 import { SlidesUpload } from "@/components/slides-upload";
-import { QuizPlayer } from "./quiz-player";
+import { MaterialSize } from "@/components/material-size";
+import { RelativeDate } from "@/components/relative-date";
+import { QuizPlayer, type QuizResult, type SaveStatus } from "./quiz-player";
+
+// "Practise my mistakes" uses at most this many questions per round.
+const MISTAKES_PER_ROUND = 10;
+// Past attempts listed on the page (all of them still count for mistakes).
+const ATTEMPTS_SHOWN = 10;
+// Above this much material, generating takes longer, so say so.
+const LARGE_MATERIAL = 50_000;
+const ATTEMPT_COLUMNS =
+  "id, score, total, kind, wrong_questions, correct_keys, created_at";
 
 // When the AI is busy, wait this many seconds before each automatic retry.
 const BUSY_RETRY_SECONDS = [10, 20, 30];
@@ -34,11 +49,17 @@ export function SetEditor({
   title,
   initialMaterial,
   initialQuiz,
+  initialAttempts,
+  initialAttemptCount,
+  historyError,
 }: {
   id: string;
   title: string;
   initialMaterial: string;
   initialQuiz: Quiz | null;
+  initialAttempts: Attempt[];
+  initialAttemptCount: number;
+  historyError: boolean;
 }) {
   const [material, setMaterial] = useState(initialMaterial);
   const [savedMaterial, setSavedMaterial] = useState(initialMaterial);
@@ -47,6 +68,7 @@ export function SetEditor({
 
   const [questionType, setQuestionType] = useState<QuestionType>("mcq");
   const [count, setCount] = useState<5 | 10>(5);
+  const [focus, setFocus] = useState("");
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [quiz, setQuiz] = useState<Quiz | null>(initialQuiz);
@@ -62,6 +84,18 @@ export function SetEditor({
   const runIdRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Past attempts (newest first) and the total number ever made.
+  const [attempts, setAttempts] = useState(initialAttempts);
+  const [attemptCount, setAttemptCount] = useState(initialAttemptCount);
+  const mistakes = useMemo(() => unresolvedMistakes(attempts), [attempts]);
+  // A "Practise my mistakes" round; while set, it's shown instead of the quiz.
+  const [practice, setPractice] = useState<Quiz | null>(null);
+  const activeQuiz = practice ?? quiz;
+  // Whether the current attempt was saved. Bumping the token when a new
+  // attempt starts stops a slow save from updating the wrong attempt.
+  const [attemptSave, setAttemptSave] = useState<SaveStatus>("idle");
+  const saveTokenRef = useRef(0);
+
   useEffect(
     () => () => {
       runIdRef.current += 1;
@@ -72,6 +106,68 @@ export function SetEditor({
 
   const length = material.trim().length;
   const unsaved = material !== savedMaterial;
+  const waitMessage =
+    length > LARGE_MATERIAL
+      ? "Generating your quiz… with this much material it can take up to a minute"
+      : "Generating your quiz… this can take up to 30 seconds";
+
+  // Called whenever a new attempt starts (retake, new quiz, mistakes round).
+  function startNewAttempt() {
+    saveTokenRef.current += 1;
+    setAttemptSave("idle");
+    setAttempt((a) => a + 1);
+  }
+
+  function scrollToQuiz() {
+    // Wait for the fresh quiz to render, then bring the user to the top of it.
+    requestAnimationFrame(() => {
+      const heading = document.getElementById("quiz-heading");
+      heading?.scrollIntoView({ behavior: "smooth", block: "start" });
+      heading?.focus({ preventScroll: true });
+    });
+  }
+
+  // Save a finished attempt; its wrong answers feed "Practise my mistakes".
+  async function handleFinished(result: QuizResult) {
+    const token = saveTokenRef.current;
+    setAttemptSave("saving");
+    const { data, error } = await createClient()
+      .from("quiz_attempts")
+      .insert({
+        study_set_id: id,
+        kind: practice ? "mistakes" : "quiz",
+        score: result.score,
+        total: result.total,
+        wrong_questions: result.wrong,
+        correct_keys: result.correctKeys,
+      })
+      .select(ATTEMPT_COLUMNS)
+      .single();
+    const saved = !error && data ? parseAttempts([data]) : [];
+    if (saved.length > 0) {
+      setAttempts((prev) => [saved[0], ...prev]);
+      setAttemptCount((c) => c + 1);
+    }
+    if (token === saveTokenRef.current) {
+      setAttemptSave(saved.length > 0 ? "saved" : "error");
+    }
+  }
+
+  function handlePractiseMistakes() {
+    setPractice({
+      questionType: "mix",
+      generatedAt: new Date().toISOString(),
+      questions: mistakes.slice(0, MISTAKES_PER_ROUND),
+    });
+    startNewAttempt();
+    scrollToQuiz();
+  }
+
+  function handleBackToQuiz() {
+    setPractice(null);
+    startNewAttempt();
+    scrollToQuiz();
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -90,13 +186,8 @@ export function SetEditor({
   }
 
   function handleRetake() {
-    setAttempt((a) => a + 1);
-    // Wait for the fresh quiz to render, then bring the user back to the top of it.
-    requestAnimationFrame(() => {
-      const heading = document.getElementById("quiz-heading");
-      heading?.scrollIntoView({ behavior: "smooth", block: "start" });
-      heading?.focus({ preventScroll: true });
-    });
+    startNewAttempt();
+    scrollToQuiz();
   }
 
   function handleGenerateNew() {
@@ -115,7 +206,12 @@ export function SetEditor({
       const res = await fetch(`/api/sets/${id}/quiz`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ material, questionType, count }),
+        body: JSON.stringify({
+          material,
+          questionType,
+          count,
+          focus: focus.trim() || undefined,
+        }),
         signal: controller.signal,
       });
       const body = await res.json().catch(() => null);
@@ -161,6 +257,8 @@ export function SetEditor({
 
         if (outcome.kind === "ok") {
           setQuiz(outcome.quiz);
+          setPractice(null);
+          startNewAttempt();
           // The route also saves the material it used.
           setSavedMaterial(material);
           return;
@@ -236,11 +334,11 @@ export function SetEditor({
           aria-describedby="material-help"
           className="mt-1 block w-full rounded-lg border border-slate-400 px-3 py-2 text-base"
         />
-        <p id="material-help" className="mt-1 text-sm text-slate-600">
-          {length.toLocaleString()} / {MAX_MATERIAL.toLocaleString()} characters
-          · at least {MIN_MATERIAL} needed to generate a quiz
-          {unsaved && " · unsaved changes"}
-        </p>
+        <MaterialSize
+          id="material-help"
+          material={material}
+          extra={unsaved ? " · unsaved changes" : ""}
+        />
 
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <button
@@ -320,6 +418,29 @@ export function SetEditor({
           </div>
         </div>
 
+        <div className="mt-4">
+          <label
+            htmlFor="focus"
+            className="block text-sm font-medium text-slate-800"
+          >
+            Focus on{" "}
+            <span className="font-normal text-slate-600">(optional)</span>
+          </label>
+          <input
+            id="focus"
+            type="text"
+            maxLength={MAX_FOCUS}
+            value={focus}
+            onChange={(e) => setFocus(e.target.value)}
+            placeholder="e.g. Lectures 5-8, or elasticity"
+            aria-describedby="focus-help"
+            className="mt-1 block min-h-11 w-full rounded-lg border border-slate-400 px-3 text-base placeholder:text-slate-500"
+          />
+          <p id="focus-help" className="mt-1 text-sm text-slate-600">
+            Leave empty to cover all your material evenly.
+          </p>
+        </div>
+
         {genError && (
           <p
             role="alert"
@@ -367,7 +488,7 @@ export function SetEditor({
         ) : (
           generating && (
             <p aria-hidden="true" className="mt-2 font-medium text-indigo-900">
-              Generating your quiz… this can take up to 30 seconds
+              {waitMessage}
             </p>
           )
         )}
@@ -379,17 +500,92 @@ export function SetEditor({
               ? `The AI is busy right now. Retry ${busyRetry.retry} of ${BUSY_RETRY_SECONDS.length} will start automatically in ${BUSY_RETRY_SECONDS[busyRetry.retry - 1]} seconds.`
               : `Retrying now, attempt ${busyRetry.retry} of ${BUSY_RETRY_SECONDS.length}.`
             : generating
-              ? "Generating your quiz, this can take up to 30 seconds."
+              ? waitMessage
               : ""}
         </p>
       </section>
 
-      {quiz && (
+      {(quiz || attempts.length > 0 || historyError) && (
+        <section
+          aria-labelledby="progress-heading"
+          className="mt-6 rounded-xl border border-slate-200 bg-white p-5"
+        >
+          <h2 id="progress-heading" className="text-lg font-semibold">
+            Your progress
+          </h2>
+          {historyError ? (
+            <p className="mt-2 text-slate-700">
+              Your past attempts couldn&apos;t be loaded right now. Quizzes
+              still work.
+            </p>
+          ) : attempts.length === 0 ? (
+            <p className="mt-2 text-slate-700">
+              No attempts yet. Finish a quiz and your score will appear here.
+            </p>
+          ) : (
+            <>
+              <ol className="mt-2 divide-y divide-slate-100">
+                {attempts.slice(0, ATTEMPTS_SHOWN).map((a, i) => (
+                  <li key={a.id} className="py-2 text-slate-800">
+                    <span className="font-medium">
+                      Attempt {attemptCount - i}
+                    </span>{" "}
+                    · {a.score}/{a.total} · <RelativeDate iso={a.created_at} />
+                    {a.kind === "mistakes" && (
+                      <span className="text-slate-600"> · mistakes practice</span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              {attemptCount > ATTEMPTS_SHOWN && (
+                <p className="mt-1 text-sm text-slate-600">
+                  Showing your {ATTEMPTS_SHOWN} most recent attempts.
+                </p>
+              )}
+            </>
+          )}
+
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+            {practice ? (
+              <button
+                type="button"
+                onClick={handleBackToQuiz}
+                disabled={!quiz}
+                className="min-h-11 rounded-lg border border-slate-300 px-4 font-medium text-slate-800 hover:bg-slate-100 disabled:opacity-60"
+              >
+                Back to the full quiz
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handlePractiseMistakes}
+                disabled={mistakes.length === 0 || generating}
+                aria-describedby="mistakes-help"
+                className="min-h-11 rounded-lg bg-indigo-700 px-4 font-semibold text-white hover:bg-indigo-800 disabled:bg-slate-200 disabled:text-slate-700"
+              >
+                Practise my mistakes
+                {mistakes.length > 0 &&
+                  ` (${Math.min(mistakes.length, MISTAKES_PER_ROUND)})`}
+              </button>
+            )}
+          </div>
+          <p id="mistakes-help" className="mt-1 text-sm text-slate-600">
+            {mistakes.length === 0
+              ? "Questions you get wrong are saved here so you can practise them later."
+              : `${mistakes.length} question${mistakes.length === 1 ? "" : "s"} you got wrong and haven't answered right since${mistakes.length > MISTAKES_PER_ROUND ? `, practised ${MISTAKES_PER_ROUND} at a time` : ""}.`}
+          </p>
+        </section>
+      )}
+
+      {activeQuiz && (
         <QuizPlayer
           // A new key remounts the player, which resets all answers.
-          key={`${quiz.generatedAt}-${attempt}`}
-          quiz={quiz}
+          key={`${activeQuiz.generatedAt}-${attempt}`}
+          quiz={activeQuiz}
+          mode={practice ? "mistakes" : "quiz"}
           generating={generating}
+          saveStatus={attemptSave}
+          onFinished={handleFinished}
           onRetake={handleRetake}
           onGenerateNew={handleGenerateNew}
         />

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import type { StudySet } from "@/lib/quiz";
+import type { StudySetSummary } from "@/lib/quiz";
 import { StudySetsManager } from "./study-sets-manager";
 
 export const metadata: Metadata = { title: "My study sets – QuizMe" };
@@ -34,13 +34,14 @@ async function StudySetsLoader() {
   // RLS already limits rows to this user; the filter just makes it explicit.
   const { data, error } = await supabase
     .from("study_sets")
-    .select("id, title, material, quiz, created_at")
+    // Only what the list shows: material and quizzes can be large.
+    .select("id, title, created_at")
     .eq("user_id", user.id)
     .order("created_at", { ascending: false });
 
   return (
     <StudySetsManager
-      initialSets={(data ?? []) as StudySet[]}
+      initialSets={(data ?? []) as StudySetSummary[]}
       loadError={error ? "Could not load your study sets. Please refresh." : null}
     />
   );
